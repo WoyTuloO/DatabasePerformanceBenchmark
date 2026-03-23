@@ -1,0 +1,1116 @@
+CREATE (6)
+C1) Dodanie zamówienia
+JPQL
+
+JPQL nie ma INSERT, więc robisz to przez persist/save:
+
+Order order = new Order();
+order.setCustomer(entityManager.getReference(Customer.class, customerId));
+order.setShippingCountry(shippingCountry);
+order.setShippingCity(shippingCity);
+order.setShippingPostalCode(shippingPostalCode);
+order.setShippingStreet(shippingStreet);
+order.setShippingBuildingNo(shippingBuildingNo);
+order.setShippingApartmentNo(shippingApartmentNo);
+order.setStatus("NEW");
+order.setTotalCents(0);
+order.setCurrency(currency);
+
+entityManager.persist(order);
+N1QL
+INSERT INTO orders (KEY, VALUE)
+VALUES (
+  "order::" || TO_STRING($orderId),
+  {
+    "orderId": $orderId,
+    "customerId": $customerId,
+    "shippingCountry": $shippingCountry,
+    "shippingCity": $shippingCity,
+    "shippingPostalCode": $shippingPostalCode,
+    "shippingStreet": $shippingStreet,
+    "shippingBuildingNo": $shippingBuildingNo,
+    "shippingApartmentNo": $shippingApartmentNo,
+    "status": "NEW",
+    "totalCents": 0,
+    "currency": $currency,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING orderId, createdAt;
+Spring Data Mongo
+OrderDocument order = new OrderDocument();
+order.setCustomerId(customerId);
+order.setShippingCountry(shippingCountry);
+order.setShippingCity(shippingCity);
+order.setShippingPostalCode(shippingPostalCode);
+order.setShippingStreet(shippingStreet);
+order.setShippingBuildingNo(shippingBuildingNo);
+order.setShippingApartmentNo(shippingApartmentNo);
+order.setStatus("NEW");
+order.setTotalCents(0);
+order.setCurrency(currency);
+order.setCreatedAt(Instant.now());
+
+mongoTemplate.save(order, "orders");
+Couchbase Java SDK
+String q = """
+INSERT INTO orders (KEY, VALUE)
+VALUES (
+  "order::" || TO_STRING($orderId),
+  {
+    "orderId": $orderId,
+    "customerId": $customerId,
+    "shippingCountry": $shippingCountry,
+    "shippingCity": $shippingCity,
+    "shippingPostalCode": $shippingPostalCode,
+    "shippingStreet": $shippingStreet,
+    "shippingBuildingNo": $shippingBuildingNo,
+    "shippingApartmentNo": $shippingApartmentNo,
+    "status": "NEW",
+    "totalCents": 0,
+    "currency": $currency,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING orderId, createdAt
+""";
+cluster.query(q, queryOptions().parameters(JsonObject.create()
+  .put("orderId", orderId)
+  .put("customerId", customerId)
+  .put("shippingCountry", shippingCountry)
+  .put("shippingCity", shippingCity)
+  .put("shippingPostalCode", shippingPostalCode)
+  .put("shippingStreet", shippingStreet)
+  .put("shippingBuildingNo", shippingBuildingNo)
+  .put("shippingApartmentNo", shippingApartmentNo)
+  .put("currency", currency)));
+C2) Dodanie itemu do koszyka
+JPQL
+Integer nextLine = entityManager.createQuery("""
+    SELECT COALESCE(MAX(oi.lineNo), 0) + 1
+    FROM OrderItem oi
+    WHERE oi.order.orderId = :orderId
+""", Integer.class)
+.setParameter("orderId", orderId)
+.getSingleResult();
+
+OrderItem item = new OrderItem();
+item.setOrder(entityManager.getReference(Order.class, orderId));
+item.setLineNo(nextLine);
+item.setProduct(entityManager.getReference(Product.class, productId));
+item.setQuantity(quantity);
+item.setUnitPriceCents(unitPriceCents);
+
+entityManager.persist(item);
+N1QL
+INSERT INTO order_items (KEY, VALUE)
+SELECT
+  "order_item::" || TO_STRING($orderId) || "::" || TO_STRING(nextLine) AS k,
+  {
+    "orderId": $orderId,
+    "lineNo": nextLine,
+    "productId": $productId,
+    "quantity": $quantity,
+    "unitPriceCents": $unitPriceCents
+  } AS v
+FROM (
+  SELECT COALESCE(MAX(oi.lineNo), 0) + 1 AS nextLine
+  FROM order_items oi
+  WHERE oi.orderId = $orderId
+) x
+RETURNING v.orderId, v.lineNo;
+Spring Data Mongo
+Integer nextLine = mongoTemplate.query(OrderItemDocument.class)
+    .matching(Query.query(Criteria.where("orderId").is(orderId)))
+    .stream()
+    .map(OrderItemDocument::getLineNo)
+    .max(Integer::compareTo)
+    .orElse(0) + 1;
+
+OrderItemDocument item = new OrderItemDocument();
+item.setOrderId(orderId);
+item.setLineNo(nextLine);
+item.setProductId(productId);
+item.setQuantity(quantity);
+item.setUnitPriceCents(unitPriceCents);
+
+mongoTemplate.save(item, "order_items");
+Couchbase Java SDK
+String q = """
+INSERT INTO order_items (KEY, VALUE)
+SELECT
+  "order_item::" || TO_STRING($orderId) || "::" || TO_STRING(nextLine),
+  {
+    "orderId": $orderId,
+    "lineNo": nextLine,
+    "productId": $productId,
+    "quantity": $quantity,
+    "unitPriceCents": $unitPriceCents
+  }
+FROM (
+  SELECT COALESCE(MAX(oi.lineNo), 0) + 1 AS nextLine
+  FROM order_items oi
+  WHERE oi.orderId = $orderId
+) x
+RETURNING $orderId AS orderId, nextLine AS lineNo
+""";
+C3) Dodanie klienta
+JPQL
+Customer c = new Customer();
+c.setEmail(email);
+c.setPasswordHash(passwordHash);
+c.setFirstName(firstName);
+c.setLastName(lastName);
+c.setPhone(phone);
+entityManager.persist(c);
+N1QL
+INSERT INTO customers (KEY, VALUE)
+VALUES (
+  "customer::" || TO_STRING($customerId),
+  {
+    "customerId": $customerId,
+    "email": $email,
+    "passwordHash": $passwordHash,
+    "firstName": $firstName,
+    "lastName": $lastName,
+    "phone": $phone,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING customerId;
+Spring Data Mongo
+CustomerDocument c = new CustomerDocument();
+c.setEmail(email);
+c.setPasswordHash(passwordHash);
+c.setFirstName(firstName);
+c.setLastName(lastName);
+c.setPhone(phone);
+c.setCreatedAt(Instant.now());
+mongoTemplate.save(c, "customers");
+Couchbase Java SDK
+String q = """
+INSERT INTO customers (KEY, VALUE)
+VALUES (
+  "customer::" || TO_STRING($customerId),
+  {
+    "customerId": $customerId,
+    "email": $email,
+    "passwordHash": $passwordHash,
+    "firstName": $firstName,
+    "lastName": $lastName,
+    "phone": $phone,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING customerId
+""";
+C4) Dodanie produktu
+JPQL
+Product p = new Product();
+p.setStockKeepingUnit(stockKeepingUnit);
+p.setName(name);
+p.setDescription(description);
+p.setBrand(entityManager.getReference(Brand.class, brandId));
+p.setCategory(entityManager.getReference(Category.class, categoryId));
+p.setBasePriceCents(basePriceCents);
+p.setCurrency(currency);
+p.setActive(true);
+entityManager.persist(p);
+N1QL
+INSERT INTO products (KEY, VALUE)
+VALUES (
+  "product::" || TO_STRING($productId),
+  {
+    "productId": $productId,
+    "stockKeepingUnit": $stockKeepingUnit,
+    "name": $name,
+    "description": $description,
+    "brandId": $brandId,
+    "categoryId": $categoryId,
+    "basePriceCents": $basePriceCents,
+    "currency": $currency,
+    "active": true,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING productId;
+Spring Data Mongo
+ProductDocument p = new ProductDocument();
+p.setStockKeepingUnit(stockKeepingUnit);
+p.setName(name);
+p.setDescription(description);
+p.setBrandId(brandId);
+p.setCategoryId(categoryId);
+p.setBasePriceCents(basePriceCents);
+p.setCurrency(currency);
+p.setActive(true);
+p.setCreatedAt(Instant.now());
+mongoTemplate.save(p, "products");
+Couchbase Java SDK
+String q = """
+INSERT INTO products (KEY, VALUE)
+VALUES (
+  "product::" || TO_STRING($productId),
+  {
+    "productId": $productId,
+    "stockKeepingUnit": $stockKeepingUnit,
+    "name": $name,
+    "description": $description,
+    "brandId": $brandId,
+    "categoryId": $categoryId,
+    "basePriceCents": $basePriceCents,
+    "currency": $currency,
+    "active": true,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING productId
+""";
+C5) Upsert stanu magazynowego
+JPQL
+
+JPQL nie ma UPSERT, więc zwykle:
+
+InventoryId id = new InventoryId(warehouseId, productId);
+Inventory inv = entityManager.find(Inventory.class, id);
+
+if (inv == null) {
+    inv = new Inventory();
+    inv.setWarehouse(entityManager.getReference(Warehouse.class, warehouseId));
+    inv.setProduct(entityManager.getReference(Product.class, productId));
+}
+inv.setQuantity(quantity);
+inv.setUpdatedAt(Instant.now());
+entityManager.persist(inv);
+N1QL
+UPSERT INTO inventory (KEY, VALUE)
+VALUES (
+  "inventory::" || TO_STRING($warehouseId) || "::" || TO_STRING($productId),
+  {
+    "warehouseId": $warehouseId,
+    "productId": $productId,
+    "quantity": $quantity,
+    "updatedAt": NOW_STR()
+  }
+)
+RETURNING warehouseId, productId, quantity;
+Spring Data Mongo
+Query q = Query.query(Criteria.where("warehouseId").is(warehouseId).and("productId").is(productId));
+Update u = new Update()
+    .set("quantity", quantity)
+    .set("updatedAt", Instant.now());
+mongoTemplate.upsert(q, u, "inventory");
+Couchbase Java SDK
+String q = """
+UPSERT INTO inventory (KEY, VALUE)
+VALUES (
+  "inventory::" || TO_STRING($warehouseId) || "::" || TO_STRING($productId),
+  {
+    "warehouseId": $warehouseId,
+    "productId": $productId,
+    "quantity": $quantity,
+    "updatedAt": NOW_STR()
+  }
+)
+RETURNING warehouseId, productId, quantity
+""";
+C6) Dodanie płatności do zamówienia
+JPQL
+OrderPayment op = new OrderPayment();
+op.setOrder(entityManager.getReference(Order.class, orderId));
+op.setPaymentMethod(entityManager.getReference(PaymentMethod.class, paymentMethodId));
+op.setProvider(provider);
+op.setAmountCents(amountCents);
+op.setCurrency(currency);
+op.setStatus(status);
+op.setPaidAt(paidAt);
+entityManager.persist(op);
+N1QL
+INSERT INTO order_payments (KEY, VALUE)
+VALUES (
+  "order_payment::" || TO_STRING($orderPaymentId),
+  {
+    "orderPaymentId": $orderPaymentId,
+    "orderId": $orderId,
+    "paymentMethodId": $paymentMethodId,
+    "provider": $provider,
+    "amountCents": $amountCents,
+    "currency": $currency,
+    "status": $status,
+    "paidAt": $paidAt,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING orderPaymentId, orderId, status;
+Spring Data Mongo
+OrderPaymentDocument op = new OrderPaymentDocument();
+op.setOrderId(orderId);
+op.setPaymentMethodId(paymentMethodId);
+op.setProvider(provider);
+op.setAmountCents(amountCents);
+op.setCurrency(currency);
+op.setStatus(status);
+op.setPaidAt(paidAt);
+op.setCreatedAt(Instant.now());
+mongoTemplate.save(op, "order_payments");
+Couchbase Java SDK
+String q = """
+INSERT INTO order_payments (KEY, VALUE)
+VALUES (
+  "order_payment::" || TO_STRING($orderPaymentId),
+  {
+    "orderPaymentId": $orderPaymentId,
+    "orderId": $orderId,
+    "paymentMethodId": $paymentMethodId,
+    "provider": $provider,
+    "amountCents": $amountCents,
+    "currency": $currency,
+    "status": $status,
+    "paidAt": $paidAt,
+    "createdAt": NOW_STR()
+  }
+)
+RETURNING orderPaymentId, orderId, status
+""";
+READ (6)
+R1) Mamy order_id i musimy sprawdzić które produkty są już niedostępne
+JPQL
+SELECT new com.example.dto.OrderUnavailableItemDto(
+  oi.lineNo,
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  COALESCE(SUM(i.quantity), 0)
+)
+FROM OrderItem oi
+JOIN oi.product p
+LEFT JOIN Inventory i ON i.product.productId = p.productId
+WHERE oi.order.orderId = :orderId
+GROUP BY oi.lineNo, p.productId, p.stockKeepingUnit, p.name, oi.quantity
+HAVING COALESCE(SUM(i.quantity), 0) < oi.quantity
+ORDER BY oi.lineNo
+N1QL
+SELECT
+  oi.lineNo,
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  COALESCE(SUM(i.quantity), 0) AS totalStock
+FROM order_items oi
+JOIN products p ON p.productId = oi.productId
+LEFT JOIN inventory i ON i.productId = p.productId
+WHERE oi.orderId = $orderId
+GROUP BY oi.lineNo, p.productId, p.stockKeepingUnit, p.name, oi.quantity
+HAVING COALESCE(SUM(i.quantity), 0) < oi.quantity
+ORDER BY oi.lineNo;
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    match(Criteria.where("orderId").is(orderId)),
+    lookup("products", "productId", "productId", "product"),
+    unwind("product"),
+    lookup("inventory", "productId", "productId", "inventoryDocs"),
+    addFields().addField("totalStock")
+        .withValue(
+            new Document("$sum", "$inventoryDocs.quantity")
+        ).build(),
+    match(ExprOperators.valueOf("totalStock").lessThan("quantity")),
+    sort(Sort.by("lineNo"))
+);
+mongoTemplate.aggregate(agg, "order_items", Document.class);
+Couchbase Java SDK
+String q = """
+SELECT
+  oi.lineNo,
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  COALESCE(SUM(i.quantity), 0) AS totalStock
+FROM order_items oi
+JOIN products p ON p.productId = oi.productId
+LEFT JOIN inventory i ON i.productId = p.productId
+WHERE oi.orderId = $orderId
+GROUP BY oi.lineNo, p.productId, p.stockKeepingUnit, p.name, oi.quantity
+HAVING COALESCE(SUM(i.quantity), 0) < oi.quantity
+ORDER BY oi.lineNo
+""";
+R2) Wszystkie produkty z marki X dostępne w mieście X
+JPQL
+SELECT DISTINCT p
+FROM Product p
+JOIN p.brand b
+JOIN Inventory i ON i.product.productId = p.productId
+JOIN i.warehouse w
+WHERE b.name = :brandName
+  AND w.city = :city
+  AND i.quantity > 0
+  AND p.active = true
+ORDER BY p.name
+N1QL
+SELECT DISTINCT
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  p.basePriceCents,
+  p.currency,
+  p.active
+FROM products p
+JOIN brands b ON b.brandId = p.brandId
+JOIN inventory i ON i.productId = p.productId
+JOIN warehouses w ON w.warehouseId = i.warehouseId
+WHERE b.name = $brandName
+  AND w.city = $city
+  AND i.quantity > 0
+  AND p.active = true
+ORDER BY p.name;
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    lookup("brands", "brandId", "brandId", "brand"),
+    unwind("brand"),
+    match(Criteria.where("brand.name").is(brandName).and("active").is(true)),
+    lookup("inventory", "productId", "productId", "inventoryDocs"),
+    unwind("inventoryDocs"),
+    match(Criteria.where("inventoryDocs.quantity").gt(0)),
+    lookup("warehouses", "inventoryDocs.warehouseId", "warehouseId", "warehouse"),
+    unwind("warehouse"),
+    match(Criteria.where("warehouse.city").is(city)),
+    group("productId")
+        .first("productId").as("productId")
+        .first("stockKeepingUnit").as("stockKeepingUnit")
+        .first("name").as("name")
+        .first("basePriceCents").as("basePriceCents")
+        .first("currency").as("currency")
+        .first("active").as("active"),
+    sort(Sort.by("name"))
+);
+Couchbase Java SDK
+String q = """
+SELECT DISTINCT
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  p.basePriceCents,
+  p.currency,
+  p.active
+FROM products p
+JOIN brands b ON b.brandId = p.brandId
+JOIN inventory i ON i.productId = p.productId
+JOIN warehouses w ON w.warehouseId = i.warehouseId
+WHERE b.name = $brandName
+  AND w.city = $city
+  AND i.quantity > 0
+  AND p.active = true
+ORDER BY p.name
+""";
+R3) Zawartość koszyka
+JPQL
+SELECT new com.example.dto.CartItemDto(
+  oi.lineNo,
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  oi.unitPriceCents,
+  (oi.quantity * oi.unitPriceCents)
+)
+FROM OrderItem oi
+JOIN oi.product p
+WHERE oi.order.orderId = :orderId
+ORDER BY oi.lineNo
+N1QL
+SELECT
+  oi.lineNo,
+  oi.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  oi.unitPriceCents,
+  (oi.quantity * oi.unitPriceCents) AS lineTotalCents
+FROM order_items oi
+JOIN products p ON p.productId = oi.productId
+WHERE oi.orderId = $orderId
+ORDER BY oi.lineNo;
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    match(Criteria.where("orderId").is(orderId)),
+    lookup("products", "productId", "productId", "product"),
+    unwind("product"),
+    project()
+        .and("lineNo").as("lineNo")
+        .and("productId").as("productId")
+        .and("product.stockKeepingUnit").as("stockKeepingUnit")
+        .and("product.name").as("name")
+        .and("quantity").as("quantity")
+        .and("unitPriceCents").as("unitPriceCents")
+        .andExpression("quantity * unitPriceCents").as("lineTotalCents"),
+    sort(Sort.by("lineNo"))
+);
+Couchbase Java SDK
+String q = """
+SELECT
+  oi.lineNo,
+  oi.productId,
+  p.stockKeepingUnit,
+  p.name,
+  oi.quantity,
+  oi.unitPriceCents,
+  (oi.quantity * oi.unitPriceCents) AS lineTotalCents
+FROM order_items oi
+JOIN products p ON p.productId = oi.productId
+WHERE oi.orderId = $orderId
+ORDER BY oi.lineNo
+""";
+R4) Sprawdzenie dostępności produktu
+JPQL
+SELECT new com.example.dto.ProductStockDto(
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  p.active,
+  COALESCE(SUM(i.quantity), 0)
+)
+FROM Product p
+LEFT JOIN Inventory i ON i.product.productId = p.productId
+WHERE p.productId = :productId
+GROUP BY p.productId, p.stockKeepingUnit, p.name, p.active
+N1QL
+SELECT
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  p.active,
+  COALESCE(SUM(i.quantity), 0) AS totalStock
+FROM products p
+LEFT JOIN inventory i ON i.productId = p.productId
+WHERE p.productId = $productId
+GROUP BY p.productId, p.stockKeepingUnit, p.name, p.active;
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    match(Criteria.where("productId").is(productId)),
+    lookup("inventory", "productId", "productId", "inventoryDocs"),
+    project("productId", "stockKeepingUnit", "name", "active")
+        .and(new Document("$sum", "$inventoryDocs.quantity")).as("totalStock")
+);
+Couchbase Java SDK
+String q = """
+SELECT
+  p.productId,
+  p.stockKeepingUnit,
+  p.name,
+  p.active,
+  COALESCE(SUM(i.quantity), 0) AS totalStock
+FROM products p
+LEFT JOIN inventory i ON i.productId = p.productId
+WHERE p.productId = $productId
+GROUP BY p.productId, p.stockKeepingUnit, p.name, p.active
+""";
+R5) Maile wszystkich ludzi, którzy płacili BLIK
+JPQL
+SELECT DISTINCT c.email
+FROM OrderPayment op
+JOIN op.order o
+JOIN o.customer c
+JOIN op.paymentMethod pm
+WHERE pm.code = 'BLIK'
+N1QL
+SELECT DISTINCT c.email
+FROM order_payments op
+JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+JOIN orders o ON o.orderId = op.orderId
+JOIN customers c ON c.customerId = o.customerId
+WHERE pm.code = "BLIK";
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    lookup("payment_methods", "paymentMethodId", "paymentMethodId", "pm"),
+    unwind("pm"),
+    match(Criteria.where("pm.code").is("BLIK")),
+    lookup("orders", "orderId", "orderId", "order"),
+    unwind("order"),
+    lookup("customers", "order.customerId", "customerId", "customer"),
+    unwind("customer"),
+    group("customer.email").first("customer.email").as("email")
+);
+Couchbase Java SDK
+String q = """
+SELECT DISTINCT c.email
+FROM order_payments op
+JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+JOIN orders o ON o.orderId = op.orderId
+JOIN customers c ON c.customerId = o.customerId
+WHERE pm.code = "BLIK"
+""";
+R6) Szczegóły zamówień klienta z produktami, marką, kategorią i płatnością
+JPQL
+SELECT new com.example.dto.OrderDetailsDto(
+  o.orderId,
+  o.createdAt,
+  o.status,
+  o.totalCents,
+  o.currency,
+  op.orderPaymentId,
+  pm.code,
+  pm.name,
+  op.provider,
+  op.status,
+  op.amountCents,
+  op.paidAt,
+  oi.lineNo,
+  oi.quantity,
+  oi.unitPriceCents,
+  pr.stockKeepingUnit,
+  pr.name,
+  b.name,
+  c.name
+)
+FROM Order o
+JOIN o.orderItems oi
+JOIN oi.product pr
+LEFT JOIN pr.brand b
+LEFT JOIN pr.category c
+LEFT JOIN o.orderPayments op
+LEFT JOIN op.paymentMethod pm
+WHERE o.customer.customerId = :customerId
+ORDER BY o.createdAt DESC, oi.lineNo, op.createdAt
+N1QL
+SELECT
+  o.orderId,
+  o.createdAt,
+  o.status,
+  o.totalCents,
+  o.currency,
+  op.orderPaymentId,
+  pm.code AS paymentMethodCode,
+  pm.name AS paymentMethodName,
+  op.provider,
+  op.status AS paymentStatus,
+  op.amountCents AS paymentAmountCents,
+  op.paidAt,
+  oi.lineNo,
+  oi.quantity,
+  oi.unitPriceCents,
+  pr.stockKeepingUnit,
+  pr.name AS productName,
+  b.name AS brandName,
+  c.name AS categoryName
+FROM orders o
+JOIN order_items oi ON oi.orderId = o.orderId
+JOIN products pr ON pr.productId = oi.productId
+LEFT JOIN brands b ON b.brandId = pr.brandId
+LEFT JOIN categories c ON c.categoryId = pr.categoryId
+LEFT JOIN order_payments op ON op.orderId = o.orderId
+LEFT JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+WHERE o.customerId = $customerId
+ORDER BY o.createdAt DESC, oi.lineNo, op.createdAt;
+Spring Data Mongo
+
+Dla Mongo to już jest pipeline agregacyjny:
+
+Aggregation agg = Aggregation.newAggregation(
+    match(Criteria.where("customerId").is(customerId)),
+    lookup("order_items", "orderId", "orderId", "items"),
+    unwind("items"),
+    lookup("products", "items.productId", "productId", "product"),
+    unwind("product"),
+    lookup("brands", "product.brandId", "brandId", "brand"),
+    unwind("brand", true),
+    lookup("categories", "product.categoryId", "categoryId", "category"),
+    unwind("category", true),
+    lookup("order_payments", "orderId", "orderId", "payment"),
+    unwind("payment", true),
+    lookup("payment_methods", "payment.paymentMethodId", "paymentMethodId", "paymentMethod"),
+    unwind("paymentMethod", true),
+    sort(Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("items.lineNo")))
+);
+Couchbase Java SDK
+String q = """
+SELECT
+  o.orderId,
+  o.createdAt,
+  o.status,
+  o.totalCents,
+  o.currency,
+  op.orderPaymentId,
+  pm.code AS paymentMethodCode,
+  pm.name AS paymentMethodName,
+  op.provider,
+  op.status AS paymentStatus,
+  op.amountCents AS paymentAmountCents,
+  op.paidAt,
+  oi.lineNo,
+  oi.quantity,
+  oi.unitPriceCents,
+  pr.stockKeepingUnit,
+  pr.name AS productName,
+  b.name AS brandName,
+  c.name AS categoryName
+FROM orders o
+JOIN order_items oi ON oi.orderId = o.orderId
+JOIN products pr ON pr.productId = oi.productId
+LEFT JOIN brands b ON b.brandId = pr.brandId
+LEFT JOIN categories c ON c.categoryId = pr.categoryId
+LEFT JOIN order_payments op ON op.orderId = o.orderId
+LEFT JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+WHERE o.customerId = $customerId
+ORDER BY o.createdAt DESC, oi.lineNo, op.createdAt
+""";
+UPDATE (6)
+U1) Obniżka wszystkich produktów z kategorii Y
+JPQL
+UPDATE Product p
+SET p.basePriceCents = CASE
+  WHEN (p.basePriceCents * :multiplier) < 0 THEN 0
+  ELSE CAST(p.basePriceCents * :multiplier AS integer)
+END
+WHERE p.category.categoryId = :categoryId
+N1QL
+UPDATE products
+SET basePriceCents = GREATEST(0, ROUND(basePriceCents * $multiplier))
+WHERE categoryId = $categoryId
+RETURNING productId, basePriceCents;
+Spring Data Mongo
+Query q = Query.query(Criteria.where("categoryId").is(categoryId));
+List<ProductDocument> products = mongoTemplate.find(q, ProductDocument.class, "products");
+for (ProductDocument p : products) {
+    p.setBasePriceCents(Math.max(0, (int)Math.round(p.getBasePriceCents() * multiplier)));
+}
+mongoTemplate.save(products, "products");
+Couchbase Java SDK
+String q = """
+UPDATE products
+SET basePriceCents = GREATEST(0, ROUND(basePriceCents * $multiplier))
+WHERE categoryId = $categoryId
+RETURNING productId, basePriceCents
+""";
+U2) Zmiana statusu zamówienia po payment_id przez join
+JPQL
+UPDATE Order o
+SET o.status = :status
+WHERE o.orderId IN (
+  SELECT op.order.orderId
+  FROM OrderPayment op
+  WHERE op.orderPaymentId = :orderPaymentId
+)
+N1QL
+UPDATE orders o
+SET o.status = $status
+WHERE o.orderId IN (
+  SELECT RAW op.orderId
+  FROM order_payments op
+  WHERE op.orderPaymentId = $orderPaymentId
+)
+RETURNING o.orderId, o.status;
+Spring Data Mongo
+OrderPaymentDocument payment = mongoTemplate.findOne(
+    Query.query(Criteria.where("orderPaymentId").is(orderPaymentId)),
+    OrderPaymentDocument.class,
+    "order_payments"
+);
+
+mongoTemplate.updateFirst(
+    Query.query(Criteria.where("orderId").is(payment.getOrderId())),
+    new Update().set("status", status),
+    "orders"
+);
+Couchbase Java SDK
+String q = """
+UPDATE orders o
+SET o.status = $status
+WHERE o.orderId IN (
+  SELECT RAW op.orderId
+  FROM order_payments op
+  WHERE op.orderPaymentId = $orderPaymentId
+)
+RETURNING o.orderId, o.status
+""";
+U3) Zmiana aktywności produktu
+JPQL
+UPDATE Product p
+SET p.active = :active
+WHERE p.productId = :productId
+N1QL
+UPDATE products
+SET active = $active
+WHERE productId = $productId
+RETURNING productId, active;
+Spring Data Mongo
+mongoTemplate.updateFirst(
+    Query.query(Criteria.where("productId").is(productId)),
+    new Update().set("active", active),
+    "products"
+);
+Couchbase Java SDK
+String q = """
+UPDATE products
+SET active = $active
+WHERE productId = $productId
+RETURNING productId, active
+""";
+U4) Podniesienie cen z marki X
+JPQL
+UPDATE Product p
+SET p.basePriceCents = CAST(p.basePriceCents * :multiplier AS integer)
+WHERE p.brand.brandId = :brandId
+N1QL
+UPDATE products
+SET basePriceCents = ROUND(basePriceCents * $multiplier)
+WHERE brandId = $brandId
+RETURNING productId, basePriceCents;
+Spring Data Mongo
+Query q = Query.query(Criteria.where("brandId").is(brandId));
+List<ProductDocument> products = mongoTemplate.find(q, ProductDocument.class, "products");
+for (ProductDocument p : products) {
+    p.setBasePriceCents((int)Math.round(p.getBasePriceCents() * multiplier));
+}
+mongoTemplate.save(products, "products");
+Couchbase Java SDK
+String q = """
+UPDATE products
+SET basePriceCents = ROUND(basePriceCents * $multiplier)
+WHERE brandId = $brandId
+RETURNING productId, basePriceCents
+""";
+U5) Aktualizacja stanu w magazynie
+JPQL
+UPDATE Inventory i
+SET i.quantity = :quantity,
+    i.updatedAt = CURRENT_TIMESTAMP
+WHERE i.warehouse.warehouseId = :warehouseId
+  AND i.product.productId = :productId
+N1QL
+UPDATE inventory
+SET quantity = $quantity,
+    updatedAt = NOW_STR()
+WHERE warehouseId = $warehouseId
+  AND productId = $productId
+RETURNING warehouseId, productId, quantity;
+Spring Data Mongo
+mongoTemplate.updateFirst(
+    Query.query(Criteria.where("warehouseId").is(warehouseId).and("productId").is(productId)),
+    new Update().set("quantity", quantity).set("updatedAt", Instant.now()),
+    "inventory"
+);
+Couchbase Java SDK
+String q = """
+UPDATE inventory
+SET quantity = $quantity,
+    updatedAt = NOW_STR()
+WHERE warehouseId = $warehouseId
+  AND productId = $productId
+RETURNING warehouseId, productId, quantity
+""";
+U6) Wszystkim orderom opłaconym metodą o danym code ustaw CANCELLED
+JPQL
+UPDATE Order o
+SET o.status = 'CANCELLED'
+WHERE o.orderId IN (
+  SELECT op.order.orderId
+  FROM OrderPayment op
+  JOIN op.paymentMethod pm
+  WHERE pm.code = :code
+)
+N1QL
+UPDATE orders o
+SET o.status = "CANCELLED"
+WHERE o.orderId IN (
+  SELECT RAW op.orderId
+  FROM order_payments op
+  JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+  WHERE pm.code = $code
+)
+RETURNING o.orderId, o.status;
+Spring Data Mongo
+Aggregation agg = Aggregation.newAggregation(
+    lookup("payment_methods", "paymentMethodId", "paymentMethodId", "pm"),
+    unwind("pm"),
+    match(Criteria.where("pm.code").is(code)),
+    project("orderId")
+);
+
+List<Document> ids = mongoTemplate.aggregate(agg, "order_payments", Document.class).getMappedResults();
+List<Long> orderIds = ids.stream().map(d -> d.getLong("orderId")).toList();
+
+mongoTemplate.updateMulti(
+    Query.query(Criteria.where("orderId").in(orderIds)),
+    new Update().set("status", "CANCELLED"),
+    "orders"
+);
+Couchbase Java SDK
+String q = """
+UPDATE orders o
+SET o.status = "CANCELLED"
+WHERE o.orderId IN (
+  SELECT RAW op.orderId
+  FROM order_payments op
+  JOIN payment_methods pm ON pm.paymentMethodId = op.paymentMethodId
+  WHERE pm.code = $code
+)
+RETURNING o.orderId, o.status
+""";
+DELETE (6)
+D1) Usuwanie zamówień starszych niż X dla customer_id
+JPQL
+DELETE FROM Order o
+WHERE o.customer.customerId = :customerId
+  AND o.createdAt < :cutoffDate
+N1QL
+DELETE FROM orders
+WHERE customerId = $customerId
+  AND createdAt < $cutoffDate
+RETURNING orderId;
+Spring Data Mongo
+mongoTemplate.remove(
+    Query.query(
+        Criteria.where("customerId").is(customerId)
+            .and("createdAt").lt(cutoffDate)
+    ),
+    "orders"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM orders
+WHERE customerId = $customerId
+  AND createdAt < $cutoffDate
+RETURNING orderId
+""";
+D2) Usunięcie całego koszyka (NEW)
+JPQL
+DELETE FROM Order o
+WHERE o.orderId = :orderId
+  AND o.status = 'NEW'
+N1QL
+DELETE FROM orders
+WHERE orderId = $orderId
+  AND status = "NEW"
+RETURNING orderId;
+Spring Data Mongo
+mongoTemplate.remove(
+    Query.query(Criteria.where("orderId").is(orderId).and("status").is("NEW")),
+    "orders"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM orders
+WHERE orderId = $orderId
+  AND status = "NEW"
+RETURNING orderId
+""";
+D3) Usuń przedmioty marki X
+
+Interpretuję to jako usunięcie rekordów z order_items dla produktów danej marki.
+
+JPQL
+DELETE FROM OrderItem oi
+WHERE oi.product.productId IN (
+  SELECT p.productId
+  FROM Product p
+  WHERE p.brand.brandId = :brandId
+)
+N1QL
+DELETE FROM order_items
+WHERE productId IN (
+  SELECT RAW p.productId
+  FROM products p
+  WHERE p.brandId = $brandId
+)
+RETURNING orderId, lineNo;
+Spring Data Mongo
+List<Long> productIds = mongoTemplate.find(
+    Query.query(Criteria.where("brandId").is(brandId)),
+    ProductDocument.class,
+    "products"
+).stream().map(ProductDocument::getProductId).toList();
+
+mongoTemplate.remove(
+    Query.query(Criteria.where("productId").in(productIds)),
+    "order_items"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM order_items
+WHERE productId IN (
+  SELECT RAW p.productId
+  FROM products p
+  WHERE p.brandId = $brandId
+)
+RETURNING orderId, lineNo
+""";
+D4) Usunięcie klienta
+JPQL
+DELETE FROM Customer c
+WHERE c.customerId = :customerId
+N1QL
+DELETE FROM customers
+WHERE customerId = $customerId
+RETURNING customerId;
+Spring Data Mongo
+mongoTemplate.remove(
+    Query.query(Criteria.where("customerId").is(customerId)),
+    "customers"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM customers
+WHERE customerId = $customerId
+RETURNING customerId
+""";
+D5) Usunięcie magazynu
+JPQL
+DELETE FROM Warehouse w
+WHERE w.warehouseId = :warehouseId
+N1QL
+DELETE FROM warehouses
+WHERE warehouseId = $warehouseId
+RETURNING warehouseId;
+Spring Data Mongo
+mongoTemplate.remove(
+    Query.query(Criteria.where("warehouseId").is(warehouseId)),
+    "warehouses"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM warehouses
+WHERE warehouseId = $warehouseId
+RETURNING warehouseId
+""";
+D6) Usuń przedmioty z kategorii Z
+
+Znowu interpretuję to jako usunięcie rekordów z order_items dla produktów z danej kategorii.
+
+JPQL
+DELETE FROM OrderItem oi
+WHERE oi.product.productId IN (
+  SELECT p.productId
+  FROM Product p
+  WHERE p.category.categoryId = :categoryId
+)
+N1QL
+DELETE FROM order_items
+WHERE productId IN (
+  SELECT RAW p.productId
+  FROM products p
+  WHERE p.categoryId = $categoryId
+)
+RETURNING orderId, lineNo;
+Spring Data Mongo
+List<Long> productIds = mongoTemplate.find(
+    Query.query(Criteria.where("categoryId").is(categoryId)),
+    ProductDocument.class,
+    "products"
+).stream().map(ProductDocument::getProductId).toList();
+
+mongoTemplate.remove(
+    Query.query(Criteria.where("productId").in(productIds)),
+    "order_items"
+);
+Couchbase Java SDK
+String q = """
+DELETE FROM order_items
+WHERE productId IN (
+  SELECT RAW p.productId
+  FROM products p
+  WHERE p.categoryId = $categoryId
+)
+RETURNING orderId, lineNo
+""";
