@@ -1,0 +1,13 @@
+stockKeepingUnit,name,description,brandId,categoryId,basePriceCents,currency
+WARM-SKU-001,Warmup Product 01,Test product for warmup 01,1,1,9999,PLN
+WARM-SKU-002,Warmup Product 02,Test product for warmup 02,1,1,9999,PLN
+WARM-SKU-003,Warmup Product 03,Test product for warmup 03,1,1,9999,PLN
+WARM-SKU-004,Warmup Product 04,Test product for warmup 04,1,1,9999,PLN
+WARM-SKU-005,Warmup Product 05,Test product for warmup 05,1,1,9999,PLN
+WARM-SKU-006,Warmup Product 06,Test product for warmup 06,1,1,9999,PLN
+WARM-SKU-007,Warmup Product 07,Test product for warmup 07,1,1,9999,PLN
+WARM-SKU-008,Warmup Product 08,Test product for warmup 08,1,1,9999,PLN
+WARM-SKU-009,Warmup Product 09,Test product for warmup 09,1,1,9999,PLN
+WARM-SKU-010,Warmup Product 10,Test product for warmup 10,1,1,9999,PLN
+
+

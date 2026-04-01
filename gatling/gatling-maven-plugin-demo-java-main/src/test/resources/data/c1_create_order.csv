@@ -1,0 +1,13 @@
+customerId,shippingCountry,shippingCity,shippingPostalCode,shippingStreet,shippingBuildingNo,shippingApartmentNo,currency
+1,Poland,Warsaw,00-001,Marszalkowska,1,1,PLN
+1,Poland,Krakow,30-001,Florianska,2,2,PLN
+1,Poland,Wroclaw,50-001,Rynek,3,3,PLN
+1,Poland,Poznan,60-001,Stary Rynek,4,4,PLN
+1,Poland,Gdansk,80-001,Dluga,5,5,PLN
+1,Poland,Szczecin,70-001,Bohaterow,6,6,PLN
+1,Poland,Lodz,90-001,Piotrkowska,7,7,PLN
+1,Poland,Bydgoszcz,85-001,Gdanska,8,8,PLN
+1,Poland,Lublin,20-001,Krakowskie Przedmiescie,9,9,PLN
+1,Poland,Katowice,40-001,Rynek,10,10,PLN
+
+

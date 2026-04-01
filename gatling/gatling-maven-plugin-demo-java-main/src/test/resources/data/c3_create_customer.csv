@@ -1,0 +1,12 @@
+email,passwordHash,firstName,lastName,phone
+warmup-customer-0111@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst01,WarmupLast01,+48500000001
+warmup-customer-021@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst02,WarmupLast02,+48500000002
+warmup-customer-031@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst03,WarmupLast03,+48500000003
+warmup-customer-041@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst04,WarmupLast04,+48500000004
+warmup-customer-051@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst05,WarmupLast05,+48500000005
+warmup-customer-061@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst06,WarmupLast06,+48500000006
+warmup-customer-071@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst07,WarmupLast07,+48500000007
+warmup-customer-081@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst08,WarmupLast08,+48500000008
+warmup-customer-091@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst09,WarmupLast09,+48500000009
+warmup-customer-101@test.com,$2a$10$abcdefghijklmnopqrstuvwxyz123456,WarmupFirst10,WarmupLast10,+48500000010
+

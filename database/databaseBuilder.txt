@@ -1,0 +1,189 @@
+CREATE SCHEMA IF NOT EXISTS shop;
+SET search_path TO shop;
+
+-- 1. Klienci
+CREATE TABLE customers (
+                           customer_id         BIGSERIAL PRIMARY KEY,
+                           email               TEXT NOT NULL UNIQUE,
+                           password_hash       TEXT NOT NULL,
+                           first_name          TEXT NOT NULL,
+                           last_name           TEXT NOT NULL,
+                           phone               TEXT,
+                           created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 2. Marki
+CREATE TABLE brands (
+                        brand_id            BIGSERIAL PRIMARY KEY,
+                        name                TEXT NOT NULL UNIQUE
+);
+
+-- 3. Kategorie (drzewo kategorii)
+CREATE TABLE categories (
+                            category_id         BIGSERIAL PRIMARY KEY,
+                            parent_category_id  BIGINT REFERENCES categories(category_id) ON DELETE SET NULL,
+                            name                TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX uq_categories_parent_name
+    ON categories(parent_category_id, name);
+
+CREATE UNIQUE INDEX uq_categories_root_name
+    ON categories(name)
+    WHERE parent_category_id IS NULL;
+
+-- 4. Produkty
+CREATE TABLE products (
+                          product_id          BIGSERIAL PRIMARY KEY,
+                          stock_keeping_unit  TEXT NOT NULL UNIQUE,
+                          name                TEXT NOT NULL,
+                          description         TEXT,
+                          brand_id            BIGINT REFERENCES brands(brand_id) ON DELETE SET NULL,
+                          category_id         BIGINT REFERENCES categories(category_id) ON DELETE SET NULL,
+                          base_price_cents    INT NOT NULL CHECK (base_price_cents >= 0),
+                          currency            CHAR(3) NOT NULL DEFAULT 'PLN',
+                          active              BOOLEAN NOT NULL DEFAULT TRUE,
+                          created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 5. Magazyny
+CREATE TABLE warehouses (
+                            warehouse_id        BIGSERIAL PRIMARY KEY,
+                            name                TEXT NOT NULL UNIQUE,
+                            city                TEXT NOT NULL
+);
+
+-- 6. Stany magazynowe
+CREATE TABLE inventory (
+                           warehouse_id        BIGINT NOT NULL REFERENCES warehouses(warehouse_id) ON DELETE CASCADE,
+                           product_id          BIGINT NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
+                           quantity            INT NOT NULL CHECK (quantity >= 0),
+                           updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+                           PRIMARY KEY (warehouse_id, product_id)
+);
+
+-- 7. Zamówienia
+CREATE TABLE orders (
+                        order_id                BIGSERIAL PRIMARY KEY,
+                        customer_id             BIGINT NOT NULL REFERENCES customers(customer_id),
+
+                        shipping_country        TEXT NOT NULL DEFAULT 'PL',
+                        shipping_city           TEXT NOT NULL,
+                        shipping_postal_code    TEXT NOT NULL,
+                        shipping_street         TEXT NOT NULL,
+                        shipping_building_no    TEXT NOT NULL,
+                        shipping_apartment_no   TEXT,
+
+                        status                  TEXT NOT NULL CHECK (status IN ('NEW','PAID','SHIPPED','CANCELLED','RETURNED')),
+                        total_cents             INT NOT NULL CHECK (total_cents >= 0),
+                        currency                CHAR(3) NOT NULL DEFAULT 'PLN',
+                        created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 8. Pozycje zamówienia
+CREATE TABLE order_items (
+                             order_id            BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+                             line_no             INT NOT NULL,
+                             product_id          BIGINT NOT NULL REFERENCES products(product_id),
+                             quantity            INT NOT NULL CHECK (quantity > 0),
+                             unit_price_cents    INT NOT NULL CHECK (unit_price_cents >= 0),
+                             PRIMARY KEY (order_id, line_no)
+);
+
+-- 9. Metody płatności
+CREATE TABLE payment_methods (
+                                 payment_method_id   BIGSERIAL PRIMARY KEY,
+                                 code                TEXT NOT NULL UNIQUE,
+                                 name                TEXT NOT NULL,
+                                 active              BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- 10. Płatności zamówień
+CREATE TABLE order_payments (
+                                order_payment_id    BIGSERIAL PRIMARY KEY,
+                                order_id            BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+                                payment_method_id   BIGINT NOT NULL REFERENCES payment_methods(payment_method_id),
+                                provider            TEXT,
+                                amount_cents        INT NOT NULL CHECK (amount_cents >= 0),
+                                currency            CHAR(3) NOT NULL DEFAULT 'PLN',
+                                status              TEXT NOT NULL CHECK (status IN ('PENDING','AUTHORIZED','CAPTURED','FAILED','REFUNDED')),
+                                paid_at             TIMESTAMPTZ,
+                                created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indeksy pod typowe SELECTy
+CREATE INDEX idx_products_category
+    ON products(category_id);
+
+CREATE INDEX idx_products_brand
+    ON products(brand_id);
+
+CREATE INDEX idx_orders_customer_created
+    ON orders(customer_id, created_at DESC);
+
+CREATE INDEX idx_order_items_product
+    ON order_items(product_id);
+
+CREATE INDEX idx_inventory_product
+    ON inventory(product_id);
+
+CREATE INDEX idx_order_payments_order
+    ON order_payments(order_id);
+
+CREATE INDEX idx_order_payments_method
+    ON order_payments(payment_method_id);
+
+-- kaskady na delete customera
+
+-- 1. Zamówienia -> Klienci
+ALTER TABLE shop.orders DROP CONSTRAINT IF EXISTS orders_customer_id_fkey,
+                        ADD CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id)
+                            REFERENCES shop.customers(customer_id) ON DELETE CASCADE;
+
+-- 2. Pozycje zamówienia -> Zamówienia
+ALTER TABLE shop.order_items DROP CONSTRAINT IF EXISTS order_items_order_id_fkey,
+                             ADD CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id)
+                                 REFERENCES shop.orders(order_id) ON DELETE CASCADE;
+
+-- 3. Płatności -> Zamówienia
+ALTER TABLE shop.order_payments DROP CONSTRAINT IF EXISTS order_payments_order_id_fkey,
+                                ADD CONSTRAINT order_payments_order_id_fkey FOREIGN KEY (order_id)
+                                    REFERENCES shop.orders(order_id) ON DELETE CASCADE;
+
+SELECT setval('orders_order_id_seq', 2000000);
+
+SELECT setval('products_product_id_seq', 500000);
+
+SELECT setval('order_payments_order_payment_id_seq', 2000000);
+
+SELECT setval('customers_customer_id_seq', 1000000);
+
+
+
+
+-- Usuwamy indeksy pomocnicze (te pod SELECTy)
+DROP INDEX IF EXISTS shop.idx_products_category;
+DROP INDEX IF EXISTS shop.idx_products_brand;
+DROP INDEX IF EXISTS shop.idx_orders_customer_created;
+DROP INDEX IF EXISTS shop.idx_order_items_product;
+DROP INDEX IF EXISTS shop.idx_inventory_product;
+DROP INDEX IF EXISTS shop.idx_order_payments_order;
+DROP INDEX IF EXISTS shop.idx_order_payments_method;
+
+
+
+
+-- Produkty
+CREATE INDEX idx_products_category ON shop.products(category_id);
+CREATE INDEX idx_products_brand ON shop.products(brand_id);
+
+-- Zamówienia (Kluczowy dla Gatlinga, bo sortuje po dacie)
+CREATE INDEX idx_orders_customer_created ON shop.orders(customer_id, created_at DESC);
+
+-- Pozycje i Inwentarz
+CREATE INDEX idx_order_items_product ON shop.order_items(product_id);
+CREATE INDEX idx_inventory_product ON shop.inventory(product_id);
+
+-- Płatności
+CREATE INDEX idx_order_payments_order ON shop.order_payments(order_id);
+CREATE INDEX idx_order_payments_method ON shop.order_payments(payment_method_id);

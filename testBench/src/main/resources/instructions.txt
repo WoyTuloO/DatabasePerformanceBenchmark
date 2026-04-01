@@ -1,0 +1,249 @@
+================================================================================
+SPECYFIKACJA ZAPYTAŃ SQL (POSTGRESQL) DO IMPLEMENTACJI
+================================================================================
+Kontekst: Masz dostęp do pliku schema.sql. Poniższe zapytania to gotowe,
+zoptymalizowane pod PostgreSQL operacje bazodanowe.
+Twoim zadaniem jest zaimplementować je w kodzie aplikacji, używając dokładnie
+tych zapytań (np. z wykorzystaniem Spring Data @Query, JdbcTemplate lub podobnych).
+Zmienne zaczynające się od dwukropka (np. :order_id) to parametry wejściowe (bind variables).
+
+--------------------------------------------------------------------------------
+SEKCJA 1: CREATE (Tworzenie i Upserty)
+--------------------------------------------------------------------------------
+
+[C1] Dodanie zamówienia
+- Zwraca: `order_id` (wygenerowane klucze).
+- Uwagi: Pola `status`, `total_cents` i `created_at` są ustawiane sztywno w zapytaniu.
+SQL:
+INSERT INTO orders (
+    customer_id, shipping_country, shipping_city, shipping_postal_code,
+    shipping_street, shipping_building_no, shipping_apartment_no,
+    status, total_cents, currency, created_at
+) VALUES (
+    :customer_id, :shipping_country, :shipping_city, :shipping_postal_code,
+    :shipping_street, :shipping_building_no, :shipping_apartment_no,
+    'NEW', 0, :currency, CURRENT_TIMESTAMP
+) RETURNING order_id;
+
+[C2] Dodanie itemu do koszyka
+- Zwraca: `order_id`, `line_no`.
+- Uwagi: Zapytanie samo wylicza `line_no` na podstawie podzapytania, unikając race condition przy standardowym odczycie.
+SQL:
+INSERT INTO order_items (order_id, line_no, product_id, quantity, unit_price_cents)
+VALUES (
+    :order_id,
+    COALESCE((SELECT MAX(line_no) FROM order_items WHERE order_id = :order_id), 0) + 1,
+    :product_id, :quantity, :unit_price_cents
+) RETURNING order_id, line_no;
+
+[C3] Dodanie klienta
+- Zwraca: `customer_id`.
+SQL:
+INSERT INTO customers (email, password_hash, first_name, last_name, phone, created_at)
+VALUES (:email, :password_hash, :first_name, :last_name, :phone, CURRENT_TIMESTAMP)
+RETURNING customer_id;
+
+[C4] Dodanie produktu
+- Zwraca: `product_id`.
+- Uwagi: `active` ustawiane domyślnie na TRUE.
+SQL:
+INSERT INTO products (
+    stock_keeping_unit, name, description, brand_id, category_id,
+    base_price_cents, currency, active, created_at
+) VALUES (
+    :stock_keeping_unit, :name, :description, :brand_id, :category_id,
+    :base_price_cents, :currency, TRUE, CURRENT_TIMESTAMP
+) RETURNING product_id;
+
+[C5] Upsert stanu magazynowego
+- Zwraca: `warehouse_id`, `product_id`, `quantity`.
+- Uwagi: Wykorzystuje natywny mechanizm PostgreSQL ON CONFLICT. Zakłada istnienie unikalnego indeksu/klucza głównego na (warehouse_id, product_id).
+SQL:
+INSERT INTO inventory (warehouse_id, product_id, quantity, updated_at)
+VALUES (:warehouse_id, :product_id, :quantity, CURRENT_TIMESTAMP)
+ON CONFLICT (warehouse_id, product_id) DO UPDATE
+SET quantity = EXCLUDED.quantity, updated_at = CURRENT_TIMESTAMP
+RETURNING warehouse_id, product_id, quantity;
+
+[C6] Dodanie płatności do zamówienia
+- Zwraca: `order_payment_id`.
+SQL:
+INSERT INTO order_payments (
+    order_id, payment_method_id, provider, amount_cents,
+    currency, status, paid_at, created_at
+) VALUES (
+    :order_id, :payment_method_id, :provider, :amount_cents,
+    :currency, :status, :paid_at, CURRENT_TIMESTAMP
+) RETURNING order_payment_id;
+
+--------------------------------------------------------------------------------
+SEKCJA 2: READ (Odczyty i Raporty)
+--------------------------------------------------------------------------------
+
+[R1] Brakujące produkty dla danego zamówienia
+- Zwraca: line_no, product_id, stock_keeping_unit, name, ordered_quantity, total_stock.
+- Uwagi: Wyszukuje pozycje z zamówienia, których łączny stan na magazynach (total_stock) jest mniejszy niż zamówiona ilość.
+SQL:
+SELECT
+    oi.line_no, p.product_id, p.stock_keeping_unit, p.name,
+    oi.quantity AS ordered_quantity, COALESCE(SUM(i.quantity), 0) AS total_stock
+FROM order_items oi
+JOIN products p ON p.product_id = oi.product_id
+LEFT JOIN inventory i ON i.product_id = p.product_id
+WHERE oi.order_id = :order_id
+GROUP BY oi.line_no, p.product_id, p.stock_keeping_unit, p.name, oi.quantity
+HAVING COALESCE(SUM(i.quantity), 0) < oi.quantity
+ORDER BY oi.line_no;
+
+[R2] Dostępne produkty marki X w mieście X
+- Zwraca: product_id, stock_keeping_unit, name, base_price_cents, currency, active.
+- Uwagi: Używa DISTINCT, weryfikuje czy active = TRUE i quantity > 0.
+SQL:
+SELECT DISTINCT
+    p.product_id, p.stock_keeping_unit, p.name, p.base_price_cents, p.currency, p.active
+FROM products p
+JOIN brands b ON b.brand_id = p.brand_id
+JOIN inventory i ON i.product_id = p.product_id
+JOIN warehouses w ON w.warehouse_id = i.warehouse_id
+WHERE b.name = :brand_name AND w.city = :city AND i.quantity > 0 AND p.active = TRUE
+ORDER BY p.name;
+
+[R3] Zawartość koszyka
+- Zwraca: line_no, product_id, stock_keeping_unit, name, quantity, unit_price_cents, line_total_cents.
+- Uwagi: Zapytanie od razu kalkuluje wartość linii (ilość * cena jednostkowa).
+SQL:
+SELECT
+    oi.line_no, p.product_id, p.stock_keeping_unit, p.name,
+    oi.quantity, oi.unit_price_cents, (oi.quantity * oi.unit_price_cents) AS line_total_cents
+FROM order_items oi
+JOIN products p ON p.product_id = oi.product_id
+WHERE oi.order_id = :order_id
+ORDER BY oi.line_no;
+
+[R4] Dostępność konkretnego produktu (Total Stock)
+- Zwraca: product_id, stock_keeping_unit, name, active, total_stock.
+SQL:
+SELECT
+    p.product_id, p.stock_keeping_unit, p.name, p.active,
+    COALESCE(SUM(i.quantity), 0) AS total_stock
+FROM products p
+LEFT JOIN inventory i ON i.product_id = p.product_id
+WHERE p.product_id = :product_id
+GROUP BY p.product_id, p.stock_keeping_unit, p.name, p.active;
+
+[R5] Maile klientów płacących konkretną metodą (np. BLIK)
+- Zwraca: email (DISTINCT).
+SQL:
+SELECT DISTINCT c.email
+FROM order_payments op
+JOIN orders o ON o.order_id = op.order_id
+JOIN customers c ON c.customer_id = o.customer_id
+JOIN payment_methods pm ON pm.payment_method_id = op.payment_method_id
+WHERE pm.code = :paymentMethod;
+
+[R6] Szczegóły zamówień klienta (Pełna historia)
+- Zwraca: Zestawienie tabel orders, order_items, products, brands, categories, order_payments, payment_methods.
+- Uwagi: Celowo użyto LEFT JOIN dla brands, categories, order_payments i payment_methods (nie każde zamówienie musi mieć już przypisaną płatność lub produkt z marką).
+SQL:
+SELECT
+    o.order_id, o.created_at, o.status, o.total_cents, o.currency,
+    op.order_payment_id, pm.code AS payment_method_code, pm.name AS payment_method_name,
+    op.provider, op.status AS payment_status, op.amount_cents AS payment_amount, op.paid_at,
+    oi.line_no, oi.quantity, oi.unit_price_cents,
+    pr.stock_keeping_unit, pr.name AS product_name,
+    b.name AS brand_name, c.name AS category_name
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.order_id
+JOIN products pr ON pr.product_id = oi.product_id
+LEFT JOIN brands b ON b.brand_id = pr.brand_id
+LEFT JOIN categories c ON c.category_id = pr.category_id
+LEFT JOIN order_payments op ON op.order_id = o.order_id
+LEFT JOIN payment_methods pm ON pm.payment_method_id = op.payment_method_id
+WHERE o.customer_id = :customer_id
+ORDER BY o.created_at DESC, oi.line_no, op.created_at;
+
+--------------------------------------------------------------------------------
+SEKCJA 3: UPDATE (Aktualizacje)
+--------------------------------------------------------------------------------
+
+[U1] Mnożnik ceny (Obniżka/Podwyżka) dla kategorii Y
+- Uwagi: GREATEST zabezpiecza przed ceną poniżej 0. CAST zabezpiecza przed zmianą typu kolumny na zmiennoprzecinkowy.
+SQL:
+UPDATE products
+SET base_price_cents = GREATEST(0, CAST(base_price_cents * :multiplier AS integer))
+WHERE category_id = :category_id;
+
+[U2] Zmiana statusu zamówienia na podstawie payment_id
+- Uwagi: Używa rozszerzenia Postgresa (klauzula FROM w UPDATE).
+SQL:
+UPDATE orders o
+SET status = :status
+FROM order_payments op
+WHERE o.order_id = op.order_id AND op.order_payment_id = :order_payment_id;
+
+[U3] Włączenie/wyłączenie produktu
+SQL:
+UPDATE products
+SET active = :active
+WHERE product_id = :product_id;
+
+[U4] Mnożnik ceny dla danej marki X
+SQL:
+UPDATE products
+SET base_price_cents = CAST(base_price_cents * :multiplier AS integer)
+WHERE brand_id = :brand_id;
+
+[U5] Bezpośrednia aktualizacja stanu magazynowego (nadpisanie)
+SQL:
+UPDATE inventory
+SET quantity = :quantity, updated_at = CURRENT_TIMESTAMP
+WHERE warehouse_id = :warehouse_id AND product_id = :product_id;
+
+[U6] Ustawienie statusu CANCELLED dla zamówień opłaconych daną metodą (kodem)
+- Uwagi: Używa JOIN-ów wewnątrz klauzuli FROM.
+SQL:
+UPDATE orders o
+SET status = 'CANCELLED'
+FROM order_payments op
+JOIN payment_methods pm ON pm.payment_method_id = op.payment_method_id
+WHERE o.order_id = op.order_id AND pm.code = :code;
+
+--------------------------------------------------------------------------------
+SEKCJA 4: DELETE (Usuwanie)
+--------------------------------------------------------------------------------
+
+[D1] Czyszczenie starych zamówień klienta
+SQL:
+DELETE FROM orders
+WHERE customer_id = :customer_id AND created_at < :cutoff_date;
+
+[D2] Usunięcie całego koszyka (tylko o statusie NEW)
+- Uwagi: Ważny warunek bezpieczeństwa (status = 'NEW').
+SQL:
+DELETE FROM orders
+WHERE order_id = :order_id AND status = 'NEW';
+
+[D3] Usunięcie z zamówień (order_items) produktów danej marki
+SQL:
+DELETE FROM order_items
+WHERE product_id IN (
+    SELECT product_id FROM products WHERE brand_id = :brand_id
+)
+AND quantity < 2;
+
+[D4] Usunięcie klienta
+- Uwagi: Pamiętaj, że zależy to od ustawień ON DELETE CASCADE w schema.sql.
+SQL:
+DELETE FROM customers WHERE customer_id = :customer_id;
+
+[D5] Usunięcie magazynu
+SQL:
+DELETE FROM warehouses WHERE warehouse_id = :warehouse_id;
+
+[D6] Usunięcie z zamówień (order_items) produktów z danej kategorii
+SQL:
+DELETE FROM order_items
+WHERE product_id IN (
+    SELECT product_id FROM products WHERE category_id = :category_id
+);
+================================================================================

@@ -1,21 +1,89 @@
-package com.example.performanceTesting.shop.api;
+@UtilityClass
+public final class ShopRequests {
 
-import com.example.performanceTesting.shop.application.ShopService;
-import com.example.performanceTesting.shop.model.ShopRequests;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+    // ═══════════════════════════ CREATE ═══════════════════════════
 
-import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Map;
+    /** C1 – Dodanie zamówienia */
+    public record CreateOrder(
+            long customerId,
+            String shippingCountry,
+            String shippingCity,
+            String shippingPostalCode,
+            String shippingStreet,
+            String shippingBuildingNo,
+            String shippingApartmentNo,
+            String currency
+    ) {}
+
+    /** C2 – Dodanie itemu do koszyka */
+    public record AddOrderItem(
+            long orderId,
+            long productId,
+            int quantity,
+            int unitPriceCents
+    ) {}
+
+    /** C3 – Dodanie klienta */
+    public record CreateCustomer(
+            String email,
+            String passwordHash,
+            String firstName,
+            String lastName,
+            String phone
+    ) {}
+
+    /** C4 – Dodanie produktu */
+    public record CreateProduct(
+            String stockKeepingUnit,
+            String name,
+            String description,
+            Long brandId,
+            Long categoryId,
+            int basePriceCents,
+            String currency
+    ) {}
+
+    /** C5 – Upsert stanu magazynowego */
+    public record UpsertInventory(
+            long warehouseId,
+            long productId,
+            int quantity
+    ) {}
+
+    /** C6 – Dodanie płatności do zamówienia */
+    public record CreateOrderPayment(
+            long orderId,
+            long paymentMethodId,
+            String provider,
+            int amountCents,
+            String currency,
+            String status,
+            OffsetDateTime paidAt
+    ) {}
+
+    // ═══════════════════════════ UPDATE (body) ═══════════════════════════
+
+    /** U1 / U4 – Mnożnik ceny */
+    public record PriceMultiplier(double multiplier) {}
+
+    /** U2 – Zmiana statusu zamówienia */
+    public record UpdateStatus(String status) {}
+
+    /** U3 – Zmiana aktywności produktu */
+    public record UpdateActive(boolean active) {}
+
+    /** U5 – Zmiana ilości (quantity) */
+    public record UpdateQuantity(int quantity) {}
+}
+
+
+
+---------------------------
+
+
 
 @RestController
 @RequestMapping("/api/shop")
-@Tag(name = "Shop CRUD", description = "24 operacje CRUD na schemacie shop – benchmark wydajności bazy danych")
 public class ShopCrudController {
 
     private final ShopService shopService;
@@ -37,11 +105,10 @@ public class ShopCrudController {
             description = "Tworzy nowy nagłówek zamówienia (koszyk) ze statusem NEW, total_cents = 0 "
                     + "i podanym adresem dostawy. created_at ustawiany automatycznie. Zwraca order_id."
     )
-    // Zmieniamy Request na listę
-    @PostMapping("/orders/batch")
-    public ResponseEntity<int[]> createOrdersBatch(
-            @RequestBody List<ShopRequests.CreateOrder> reqs) {
-        return ResponseEntity.ok(shopService.createOrdersBatch(reqs));
+    @PostMapping("/orders")
+    public ResponseEntity<Map<String, Object>> createOrder(
+            @RequestBody ShopRequests.CreateOrder req) {
+        return ResponseEntity.ok(shopService.createOrder(req));
     }
 
     @Operation(
