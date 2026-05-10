@@ -50,7 +50,7 @@ public interface ShopService {
     Map<String, Object> getProductAvailability(long productId);
 
     /** R5 – Maile klientów płacących konkretną metodą (np. BLIK) */
-    List<Map<String, Object>> getCustomerEmailsByPaymentMethod(String paymentMethodCode);
+    Integer getCustomerEmailsByPaymentMethod(String paymentMethodCode);
 
     /** R6 – Szczegóły zamówień klienta z produktami, marką, kategorią i płatnością */
     List<Map<String, Object>> getCustomerOrderDetails(long customerId);

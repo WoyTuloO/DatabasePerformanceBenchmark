@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: performanceTesting
+  threads:
+    virtual:
+      enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+    database-platform: org.hibernate.dialect.MySQLDialect   #mysql
+server:
+  tomcat:
+    threads:
+      max: 10000
+      min-spare: 100
+    max-connections: 20000
+    accept-count: 1000
+debug: true
+app:
+  database:
+    # Dostępne: postgres | mysql | mongo | couchbase
+    type: mysql
+    postgres:
+      url: jdbc:postgresql://localhost:5432/performance_test
+      username: postgres
+      password: password
+      driver-class-name: org.postgresql.Driver
+      indexes: false
+    mysql:
+      url: jdbc:mysql://localhost:3306/performance_test?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC&rewriteBatchedStatements=true&cachePrepStmts=true&prepStmtCacheSize=250&prepStmtCacheSqlLimit=2048&useServerPrepStmts=true&allowLoadLocalInfile=true&allowLoadLocalInfileInPath=/&maxAllowedPacket=268435456
+      username: app
+      password: password
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      indexes: true
+    mongo:
+      uri: mongodb://localhost:27017
+      database: performance_test
+      indexes: false
+    couchbase:
+      connection-string: couchbase://localhost
+      username: Administrator
+      password: password
+      bucket: perf_bucket
+      scope: shop
+      indexes: true
+  seed:
+    enabled: true
+    dataset: 1_000_000
+    location: classpath*:database
+    batch-size: 10000
+    reset-before-load: true

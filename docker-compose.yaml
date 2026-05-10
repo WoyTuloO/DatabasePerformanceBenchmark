@@ -15,5 +15,98 @@ services:
       timeout: 5s
       retries: 5
 
+  mysql:
+    image: mysql:8.4
+    command: 
+      - --local-infile=1
+      - --innodb_flush_log_at_trx_commit=2
+      - --innodb_flush_method=O_DIRECT
+      - --innodb_buffer_pool_size=2G
+      - --innodb_log_file_size=512M
+      - --innodb_write_io_threads=8
+      - --innodb_doublewrite=0
+      - --max_allowed_packet=256M
+      - --bulk_insert_buffer_size=32M
+    environment:
+      MYSQL_ROOT_PASSWORD: 'rootpassword'
+      MYSQL_DATABASE: 'performance_test'
+      MYSQL_USER: 'app'
+      MYSQL_PASSWORD: 'password'
+    ports:
+      - '3306:3306'
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -h localhost -u app -ppassword" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:7.0
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: [ "CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+#  couchbase:
+#    image: couchbase:community-7.6.2
+#    ports:
+#      - '8091-8096:8091-8096'
+#      - '11210:11210'
+#    volumes:
+#      - couchbase_data:/opt/couchbase/var
+#    healthcheck:
+#      test: [ "CMD-SHELL", "curl -fsS http://localhost:8091/pools > /dev/null || exit 1" ]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 30
+#      start_period: 60s
+#
+#  couchbase-init:
+#    image: couchbase:community-7.6.2
+#    profiles: ["cb-init"]
+#    depends_on:
+#      couchbase:
+#        condition: service_healthy
+#    restart: unless-stopped
+#    entrypoint: ["/bin/bash", "-c"]
+#    healthcheck:
+#      test: [ "CMD-SHELL", "test -f /tmp/couchbase-init.ready" ]
+#      interval: 5s
+#      timeout: 3s
+#      retries: 20
+#    command:
+#      - |
+#        set -e
+#        until curl -fsS http://couchbase:8091/pools > /dev/null; do sleep 2; done
+#        if ! couchbase-cli server-list -c couchbase:8091 -u Administrator -p password >/dev/null 2>&1; then
+#          couchbase-cli cluster-init -c couchbase:8091 --cluster-username Administrator --cluster-password password --services data,index,query --cluster-ramsize 1024 --cluster-index-ramsize 512
+#        fi
+#        if ! couchbase-cli bucket-list -c couchbase:8091 -u Administrator -p password | grep -q perf_bucket; then
+#          couchbase-cli bucket-create -c couchbase:8091 -u Administrator -p password --bucket perf_bucket --bucket-type couchbase --bucket-ramsize 256 --enable-flush 1
+#        fi
+#
+#        # Wait until bucket is visible and query service is reachable.
+#        until couchbase-cli bucket-list -c couchbase:8091 -u Administrator -p password | grep -q perf_bucket; do sleep 2; done
+#        until curl -sS http://couchbase:8093/admin/ping > /dev/null; do sleep 2; done
+#
+#        couchbase-cli collection-manage -c couchbase:8091 -u Administrator -p password --bucket perf_bucket --create-scope shop >/dev/null 2>&1 || true
+#        for c in brands categories payment_methods warehouses customers products inventory orders order_payments order_items; do
+#          couchbase-cli collection-manage -c couchbase:8091 -u Administrator -p password --bucket perf_bucket --create-collection shop.$$c >/dev/null 2>&1 || true
+#        done
+#
+#        # Mark init healthy only when scope/collections setup step has been executed.
+#        touch /tmp/couchbase-init.ready
+#        tail -f /dev/null
+
 volumes:
   postgres_data:
+  mysql_data:
+  mongo_data:
+  couchbase_data:

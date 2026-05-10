@@ -1,54 +1,70 @@
 # Shop CSV API
 
-Aplikacja wystawia 24 endpointy `C1..D6` pod `/api/postgres/shop`.
+## Auto-reset i auto-seeding bazy
 
-- `Content-Type: text/csv`
-- `Accept: text/csv`
-- request body moze miec wiele wierszy (batch)
-- odpowiedz jest CSV z naglowkiem
+Przy starcie aplikacji możesz teraz sterować typem bazy i zestawem danych z poziomu `application.yaml`:
 
-24 endpointy CRUD (C1..D6) sa pod `/api/postgres/shop/*`.
-
-## Import 6 plikow startowych (kolejnosc)
-
-1. `POST /api/postgres/shop/seed/customers`
-2. `POST /api/postgres/shop/seed/products`
-3. `POST /api/postgres/shop/seed/inventory`
-4. `POST /api/postgres/shop/seed/order-payments` (dla Twojego pliku `4_order_items_*`, bo dane maja format platnosci)
-5. `POST /api/postgres/shop/seed/orders`
-6. `POST /api/postgres/shop/seed/order-payments`
-
-Przyklad:
-
-```bash
-curl -X POST "http://localhost:8080/api/postgres/shop/c3/customers" \
-  -H "Content-Type: text/csv" \
-  -H "Accept: text/csv" \
-  --data-binary "user1@example.com,hash_1,Anna,Nowak,+48123123123"
+```yaml
+app:
+  database:
+    type: postgres
+  seed:
+    enabled: true
+    dataset: 1_000_000
+    location: classpath*:database
+    batch-size: 5000
+    reset-before-load: true
 ```
 
-Test mapowania endpointow:
+### Jak działa bootstrap
 
-```bash
-./mvnw.cmd -pl testBench -Dtest=ShopControllerMappingsTest test
+1. aplikacja wybiera mechanizm po `app.database.type`
+2. dla `postgres` sprawdza, czy istnieje schemat `shop`
+3. jeśli trzeba, inicjalizuje go z `schema.txt`
+4. wykonuje `TRUNCATE ... RESTART IDENTITY CASCADE`
+5. ładuje CSV z katalogu `src/main/resources/database/<dataset>`
+6. pliki są wykonywane według prefiksu liczbowego, np. `0_*`, potem `1_*`, `2_*`, itd.
+7. po imporcie synchronizowane są sekwencje PostgreSQL
+
+### Struktura datasetów
+
+Przykład:
+
+```text
+src/main/resources/database/
+└── 1_000_000/
+    ├── 0_brands.csv
+    ├── 0_categories.csv
+    ├── 0_payment_methods.csv
+    ├── 0_warehouses.csv
+    ├── 1_customers_FIRST_TO_RUN.csv
+    ├── 2_products_SECOND_TO_RUN.csv
+    ├── 3_inventory_THIRD_TO_RUN.csv
+    ├── 4_orders_FOURTH_TO_RUN.csv
+    ├── 5_order_payments_5TH_TO_RUN.csv
+    └── 6_order_items_6TH_TO_RUN.csv
 ```
+
+Możesz dodawać kolejne zestawy, np. `100_000`, `500_000`, `1_000_000`, i przełączać je tylko przez `app.seed.dataset`.
 
 ## REST CRUD (JSON) pod Gatling
 
-Dla testow wydajnosciowych masz tez normalne endpointy CRUD (GET/POST/PUT/PATCH/DELETE) pod tym samym prefiksem `/api/postgres/shop`.
+Aplikacja wystawia 24 endpointy `C1..D6` pod `/api/shop`.
 
 Przyklady:
 
 ```bash
-curl -X POST "http://localhost:8080/api/postgres/shop/orders" \
+curl -X POST "http://localhost:8080/api/shop/orders/batch" \
   -H "Content-Type: application/json" \
-  -d "{\"customerId\":1,\"shippingCountry\":\"PL\",\"shippingCity\":\"Warszawa\",\"shippingPostalCode\":\"00-001\",\"shippingStreet\":\"Prosta\",\"shippingBuildingNo\":\"1\",\"shippingApartmentNo\":\"\",\"currency\":\"PLN\"}"
+  -d "[{\"customerId\":1,\"shippingCountry\":\"PL\",\"shippingCity\":\"Warszawa\",\"shippingPostalCode\":\"00-001\",\"shippingStreet\":\"Prosta\",\"shippingBuildingNo\":\"1\",\"shippingApartmentNo\":\"\",\"currency\":\"PLN\"}]"
 
-curl "http://localhost:8080/api/postgres/shop/orders?customerId=1&limit=50&offset=0"
+curl "http://localhost:8080/api/shop/orders/1/items"
 
-curl -X PATCH "http://localhost:8080/api/postgres/shop/orders/1/status?status=PAID"
+curl -X PATCH "http://localhost:8080/api/shop/products/1/active" \
+  -H "Content-Type: application/json" \
+  -d "{\"active\":false}"
 
-curl -X DELETE "http://localhost:8080/api/postgres/shop/order-items/1/1"
+curl -X DELETE "http://localhost:8080/api/shop/orders/1"
 ```
 
 

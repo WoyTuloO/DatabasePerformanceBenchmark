@@ -160,7 +160,7 @@ public class ShopCrudController {
                     + "(np. BLIK, CARD). JOIN: order_payments → orders → customers → payment_methods."
     )
     @GetMapping("/customers/by-payment-method/{code}/emails")
-    public ResponseEntity<List<Map<String, Object>>> getCustomerEmailsByPaymentMethod(
+    public ResponseEntity<Integer> getCustomerEmailsByPaymentMethod(
             @Parameter(description = "Kod metody płatności (payment_methods.code), np. BLIK") @PathVariable String code) {
         return ResponseEntity.ok(shopService.getCustomerEmailsByPaymentMethod(code));
     }

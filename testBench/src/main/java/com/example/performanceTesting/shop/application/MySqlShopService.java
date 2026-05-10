@@ -6,26 +6,29 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Implementacja ShopService dla PostgreSQL.
- * Używa {@link NamedParameterJdbcTemplate} z surowymi zapytaniami SQL
- * zgodnymi ze specyfikacją instructions.txt.
- */
 @Service
-@ConditionalOnProperty(prefix = "app.database", name = "type", havingValue = "postgres")
-public class PostgresShopService implements DatabaseAwareShopService {
+@Transactional
+@ConditionalOnProperty(prefix = "app.database", name = "type", havingValue = "mysql")
+public class MySqlShopService implements DatabaseAwareShopService {
 
     private final NamedParameterJdbcTemplate jdbc;
 
-    public PostgresShopService(NamedParameterJdbcTemplate jdbc) {
+    public MySqlShopService(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    @Override
+    public DatabaseType type() {
+        return DatabaseType.MYSQL;
     }
 
     private Map<String, Object> queryOneOrEmpty(String sql, MapSqlParameterSource params) {
@@ -33,61 +36,78 @@ public class PostgresShopService implements DatabaseAwareShopService {
         return rows.isEmpty() ? Collections.emptyMap() : rows.getFirst();
     }
 
-    @Override
-    public DatabaseType type() {
-        return DatabaseType.POSTGRES;
+    private long lastInsertId() {
+        Long id = jdbc.queryForObject("SELECT LAST_INSERT_ID()", new MapSqlParameterSource(), Long.class);
+        if (id == null) {
+            throw new IllegalStateException("LAST_INSERT_ID() zwrócił null");
+        }
+        return id;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  CREATE
-    // ═══════════════════════════════════════════════════════════════════
+    private Timestamp toTimestamp(OffsetDateTime dateTime) {
+        return dateTime == null ? null : Timestamp.from(dateTime.toInstant());
+    }
 
     @Override
     public int[] createOrdersBatch(List<ShopRequests.CreateOrder> reqs) {
-        var sql = """
-            INSERT INTO orders (
-                customer_id, shipping_country, shipping_city, shipping_postal_code,
-                shipping_street, shipping_building_no, shipping_apartment_no,
-                status, total_cents, currency, created_at
-            ) VALUES (
-                :customer_id, :shipping_country, :shipping_city, :shipping_postal_code,
-                :shipping_street, :shipping_building_no, :shipping_apartment_no,
-                'NEW', 0, :currency, CURRENT_TIMESTAMP
-            )
-            """;
+        try {
+            var sql = """
+                INSERT INTO orders (
+                    customer_id, shipping_country, shipping_city, shipping_postal_code,
+                    shipping_street, shipping_building_no, shipping_apartment_no,
+                    status, total_cents, currency, created_at
+                ) VALUES (
+                    :customer_id, :shipping_country, :shipping_city, :shipping_postal_code,
+                    :shipping_street, :shipping_building_no, :shipping_apartment_no,
+                    'NEW', 0, :currency, CURRENT_TIMESTAMP
+                )
+                """;
 
-        // Mapujemy listę obiektów na tablicę map parametrów
-        MapSqlParameterSource[] batchParams = reqs.stream()
-                .map(req -> new MapSqlParameterSource()
-                        .addValue("customer_id", req.customerId())
-                        .addValue("shipping_country", req.shippingCountry())
-                        .addValue("shipping_city", req.shippingCity())
-                        .addValue("shipping_postal_code", req.shippingPostalCode())
-                        .addValue("shipping_street", req.shippingStreet())
-                        .addValue("shipping_building_no", req.shippingBuildingNo())
-                        .addValue("shipping_apartment_no", req.shippingApartmentNo(), Types.VARCHAR)
-                        .addValue("currency", req.currency()))
-                .toArray(MapSqlParameterSource[]::new);
+            MapSqlParameterSource[] batchParams = reqs.stream()
+                    .map(req -> new MapSqlParameterSource()
+                            .addValue("customer_id", req.customerId())
+                            .addValue("shipping_country", req.shippingCountry())
+                            .addValue("shipping_city", req.shippingCity())
+                            .addValue("shipping_postal_code", req.shippingPostalCode())
+                            .addValue("shipping_street", req.shippingStreet())
+                            .addValue("shipping_building_no", req.shippingBuildingNo())
+                            .addValue("shipping_apartment_no", req.shippingApartmentNo(), Types.VARCHAR)
+                            .addValue("currency", req.currency()))
+                    .toArray(MapSqlParameterSource[]::new);
 
-        return jdbc.batchUpdate(sql, batchParams);
+            return jdbc.batchUpdate(sql, batchParams);
+        } catch (Exception e) {
+            System.err.println("ERROR in createOrdersBatch: " + e.getMessage());
+            e.printStackTrace();
+            throw e;
+        }
     }
 
     @Override
     public Map<String, Object> addOrderItem(ShopRequests.AddOrderItem req) {
-        var sql = """
+        var params = new MapSqlParameterSource("order_id", req.orderId());
+        Integer nextLineNo = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(line_no), 0) + 1 FROM order_items WHERE order_id = :order_id",
+                params,
+                Integer.class);
+
+        if (nextLineNo == null) {
+            throw new IllegalStateException("Nie udało się wyznaczyć line_no");
+        }
+
+        var insertSql = """
                 INSERT INTO order_items (order_id, line_no, product_id, quantity, unit_price_cents)
-                VALUES (
-                    :order_id,
-                    COALESCE((SELECT MAX(line_no) FROM order_items WHERE order_id = :order_id), 0) + 1,
-                    :product_id, :quantity, :unit_price_cents
-                ) RETURNING order_id, line_no
+                VALUES (:order_id, :line_no, :product_id, :quantity, :unit_price_cents)
                 """;
-        var params = new MapSqlParameterSource()
+
+        jdbc.update(insertSql, new MapSqlParameterSource()
                 .addValue("order_id", req.orderId())
+                .addValue("line_no", nextLineNo)
                 .addValue("product_id", req.productId())
                 .addValue("quantity", req.quantity())
-                .addValue("unit_price_cents", req.unitPriceCents());
-        return jdbc.queryForMap(sql, params);
+                .addValue("unit_price_cents", req.unitPriceCents()));
+
+        return Map.of("order_id", req.orderId(), "line_no", nextLineNo);
     }
 
     @Override
@@ -95,15 +115,16 @@ public class PostgresShopService implements DatabaseAwareShopService {
         var sql = """
                 INSERT INTO customers (email, password_hash, first_name, last_name, phone, created_at)
                 VALUES (:email, :password_hash, :first_name, :last_name, :phone, CURRENT_TIMESTAMP)
-                RETURNING customer_id
                 """;
-        var params = new MapSqlParameterSource()
+
+        jdbc.update(sql, new MapSqlParameterSource()
                 .addValue("email", req.email())
                 .addValue("password_hash", req.passwordHash())
                 .addValue("first_name", req.firstName())
                 .addValue("last_name", req.lastName())
-                .addValue("phone", req.phone(), Types.VARCHAR);
-        return jdbc.queryForMap(sql, params);
+                .addValue("phone", req.phone(), Types.VARCHAR));
+
+        return Map.of("customer_id", lastInsertId());
     }
 
     @Override
@@ -115,17 +136,19 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 ) VALUES (
                     :stock_keeping_unit, :name, :description, :brand_id, :category_id,
                     :base_price_cents, :currency, TRUE, CURRENT_TIMESTAMP
-                ) RETURNING product_id
+                )
                 """;
-        var params = new MapSqlParameterSource()
+
+        jdbc.update(sql, new MapSqlParameterSource()
                 .addValue("stock_keeping_unit", req.stockKeepingUnit())
                 .addValue("name", req.name())
                 .addValue("description", req.description(), Types.VARCHAR)
                 .addValue("brand_id", req.brandId(), Types.BIGINT)
                 .addValue("category_id", req.categoryId(), Types.BIGINT)
                 .addValue("base_price_cents", req.basePriceCents())
-                .addValue("currency", req.currency());
-        return jdbc.queryForMap(sql, params);
+                .addValue("currency", req.currency()));
+
+        return Map.of("product_id", lastInsertId());
     }
 
     @Override
@@ -133,15 +156,20 @@ public class PostgresShopService implements DatabaseAwareShopService {
         var sql = """
                 INSERT INTO inventory (warehouse_id, product_id, quantity, updated_at)
                 VALUES (:warehouse_id, :product_id, :quantity, CURRENT_TIMESTAMP)
-                ON CONFLICT (warehouse_id, product_id) DO UPDATE
-                SET quantity = EXCLUDED.quantity, updated_at = CURRENT_TIMESTAMP
-                RETURNING warehouse_id, product_id, quantity
+                ON DUPLICATE KEY UPDATE
+                    quantity = VALUES(quantity),
+                    updated_at = CURRENT_TIMESTAMP
                 """;
-        var params = new MapSqlParameterSource()
+
+        jdbc.update(sql, new MapSqlParameterSource()
                 .addValue("warehouse_id", req.warehouseId())
                 .addValue("product_id", req.productId())
-                .addValue("quantity", req.quantity());
-        return jdbc.queryForMap(sql, params);
+                .addValue("quantity", req.quantity()));
+
+        return Map.of(
+                "warehouse_id", req.warehouseId(),
+                "product_id", req.productId(),
+                "quantity", req.quantity());
     }
 
     @Override
@@ -153,22 +181,20 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 ) VALUES (
                     :order_id, :payment_method_id, :provider, :amount_cents,
                     :currency, :status, :paid_at, CURRENT_TIMESTAMP
-                ) RETURNING order_payment_id
+                )
                 """;
-        var params = new MapSqlParameterSource()
+
+        jdbc.update(sql, new MapSqlParameterSource()
                 .addValue("order_id", req.orderId())
                 .addValue("payment_method_id", req.paymentMethodId())
                 .addValue("provider", req.provider(), Types.VARCHAR)
                 .addValue("amount_cents", req.amountCents())
                 .addValue("currency", req.currency())
                 .addValue("status", req.status())
-                .addValue("paid_at", req.paidAt(), Types.TIMESTAMP_WITH_TIMEZONE);
-        return jdbc.queryForMap(sql, params);
-    }
+                .addValue("paid_at", toTimestamp(req.paidAt()), Types.TIMESTAMP));
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  READ
-    // ═══════════════════════════════════════════════════════════════════
+        return Map.of("order_payment_id", lastInsertId());
+    }
 
     @Override
     public List<Map<String, Object>> getMissingProducts(long orderId) {
@@ -184,8 +210,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 HAVING COALESCE(SUM(i.quantity), 0) < oi.quantity
                 ORDER BY oi.line_no
                 """;
-        var params = new MapSqlParameterSource("order_id", orderId);
-        return jdbc.queryForList(sql, params);
+        return jdbc.queryForList(sql, new MapSqlParameterSource("order_id", orderId));
     }
 
     @Override
@@ -200,9 +225,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 WHERE b.name = :brand_name AND w.city = :city AND i.quantity > 0 AND p.active = TRUE
                 ORDER BY p.name
                 """;
-        var params = new MapSqlParameterSource()
-                .addValue("brand_name", brandName)
-                .addValue("city", city);
+        var params = new MapSqlParameterSource().addValue("brand_name", brandName).addValue("city", city);
         return jdbc.queryForList(sql, params);
     }
 
@@ -217,8 +240,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 WHERE oi.order_id = :order_id
                 ORDER BY oi.line_no
                 """;
-        var params = new MapSqlParameterSource("order_id", orderId);
-        return jdbc.queryForList(sql, params);
+        return jdbc.queryForList(sql, new MapSqlParameterSource("order_id", orderId));
     }
 
     @Override
@@ -232,8 +254,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 WHERE p.product_id = :product_id
                 GROUP BY p.product_id, p.stock_keeping_unit, p.name, p.active
                 """;
-        var params = new MapSqlParameterSource("product_id", productId);
-        return queryOneOrEmpty(sql, params);
+        return queryOneOrEmpty(sql, new MapSqlParameterSource("product_id", productId));
     }
 
     @Override
@@ -249,7 +270,8 @@ public class PostgresShopService implements DatabaseAwareShopService {
 
         var params = new MapSqlParameterSource("payment_method", paymentMethodCode);
 
-        return jdbc.queryForObject(sql, params, Integer.class);
+        Integer count = jdbc.queryForObject(sql, params, Integer.class);
+        return count != null ? count : 0;
     }
 
     @Override
@@ -272,24 +294,17 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 WHERE o.customer_id = :customer_id
                 ORDER BY o.created_at DESC, oi.line_no, op.created_at
                 """;
-        var params = new MapSqlParameterSource("customer_id", customerId);
-        return jdbc.queryForList(sql, params);
+        return jdbc.queryForList(sql, new MapSqlParameterSource("customer_id", customerId));
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  UPDATE
-    // ═══════════════════════════════════════════════════════════════════
 
     @Override
     public int updateCategoryPrices(long categoryId, double multiplier) {
         var sql = """
                 UPDATE products
-                SET base_price_cents = GREATEST(0, CAST(base_price_cents * :multiplier AS integer))
+                SET base_price_cents = GREATEST(0, CAST(base_price_cents * :multiplier AS SIGNED))
                 WHERE category_id = :category_id
                 """;
-        var params = new MapSqlParameterSource()
-                .addValue("multiplier", multiplier)
-                .addValue("category_id", categoryId);
+        var params = new MapSqlParameterSource().addValue("multiplier", multiplier).addValue("category_id", categoryId);
         return jdbc.update(sql, params);
     }
 
@@ -297,13 +312,11 @@ public class PostgresShopService implements DatabaseAwareShopService {
     public int updateOrderStatusByPayment(long orderPaymentId, String status) {
         var sql = """
                 UPDATE orders o
-                SET status = :status
-                FROM order_payments op
-                WHERE o.order_id = op.order_id AND op.order_payment_id = :order_payment_id
+                JOIN order_payments op ON o.order_id = op.order_id
+                SET o.status = :status
+                WHERE op.order_payment_id = :order_payment_id
                 """;
-        var params = new MapSqlParameterSource()
-                .addValue("status", status)
-                .addValue("order_payment_id", orderPaymentId);
+        var params = new MapSqlParameterSource().addValue("status", status).addValue("order_payment_id", orderPaymentId);
         return jdbc.update(sql, params);
     }
 
@@ -314,9 +327,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 SET active = :active
                 WHERE product_id = :product_id
                 """;
-        var params = new MapSqlParameterSource()
-                .addValue("active", active)
-                .addValue("product_id", productId);
+        var params = new MapSqlParameterSource().addValue("active", active).addValue("product_id", productId);
         return jdbc.update(sql, params);
     }
 
@@ -324,12 +335,10 @@ public class PostgresShopService implements DatabaseAwareShopService {
     public int updateBrandPrices(long brandId, double multiplier) {
         var sql = """
                 UPDATE products
-                SET base_price_cents = CAST(base_price_cents * :multiplier AS integer)
+                SET base_price_cents = CAST(base_price_cents * :multiplier AS SIGNED)
                 WHERE brand_id = :brand_id
                 """;
-        var params = new MapSqlParameterSource()
-                .addValue("multiplier", multiplier)
-                .addValue("brand_id", brandId);
+        var params = new MapSqlParameterSource().addValue("multiplier", multiplier).addValue("brand_id", brandId);
         return jdbc.update(sql, params);
     }
 
@@ -351,18 +360,13 @@ public class PostgresShopService implements DatabaseAwareShopService {
     public int cancelOrdersByPaymentMethod(String code) {
         var sql = """
                 UPDATE orders o
-                SET status = 'CANCELLED'
-                FROM order_payments op
+                JOIN order_payments op ON o.order_id = op.order_id
                 JOIN payment_methods pm ON pm.payment_method_id = op.payment_method_id
-                WHERE o.order_id = op.order_id AND pm.code = :code
+                SET o.status = 'CANCELLED'
+                WHERE pm.code = :code
                 """;
-        var params = new MapSqlParameterSource("code", code);
-        return jdbc.update(sql, params);
+        return jdbc.update(sql, new MapSqlParameterSource("code", code));
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  DELETE
-    // ═══════════════════════════════════════════════════════════════════
 
     @Override
     public int deleteOldCustomerOrders(long customerId, OffsetDateTime cutoffDate) {
@@ -372,7 +376,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 """;
         var params = new MapSqlParameterSource()
                 .addValue("customer_id", customerId)
-                .addValue("cutoff_date", cutoffDate, Types.TIMESTAMP_WITH_TIMEZONE);
+                .addValue("cutoff_date", toTimestamp(cutoffDate), Types.TIMESTAMP);
         return jdbc.update(sql, params);
     }
 
@@ -382,36 +386,36 @@ public class PostgresShopService implements DatabaseAwareShopService {
                 DELETE FROM orders
                 WHERE order_id = :order_id AND status = 'NEW'
                 """;
-        var params = new MapSqlParameterSource("order_id", orderId);
-        return jdbc.update(sql, params);
+        return jdbc.update(sql, new MapSqlParameterSource("order_id", orderId));
     }
 
     @Override
     public int deleteOrderItemsByBrand(long brandId) {
+        if (brandId <= 0) {
+            return 0;
+        }
+
         var sql = """
-                DELETE FROM order_items oi
-                USING products p
-                WHERE oi.product_id = p.product_id
-                  AND p.brand_id = :brand_id
+                DELETE oi
+                FROM order_items oi
+                JOIN products p ON oi.product_id = p.product_id
+                WHERE p.brand_id = :brand_id
                   AND oi.quantity < 2
-                  AND oi.product_id % :brand_id < 5;
+                  AND MOD(oi.product_id, :brand_id) < 5
                 """;
-        var params = new MapSqlParameterSource("brand_id", brandId);
-        return jdbc.update(sql, params);
+        return jdbc.update(sql, new MapSqlParameterSource("brand_id", brandId));
     }
 
     @Override
     public int deleteCustomer(long customerId) {
-        var sql = "DELETE FROM customers WHERE customer_id = :customer_id";
-        var params = new MapSqlParameterSource("customer_id", customerId);
-        return jdbc.update(sql, params);
+        return jdbc.update("DELETE FROM customers WHERE customer_id = :customer_id",
+                new MapSqlParameterSource("customer_id", customerId));
     }
 
     @Override
     public int deleteWarehouse(long warehouseId) {
-        var sql = "DELETE FROM warehouses WHERE warehouse_id = :warehouse_id";
-        var params = new MapSqlParameterSource("warehouse_id", warehouseId);
-        return jdbc.update(sql, params);
+        return jdbc.update("DELETE FROM warehouses WHERE warehouse_id = :warehouse_id",
+                new MapSqlParameterSource("warehouse_id", warehouseId));
     }
 
     @Override
@@ -422,8 +426,7 @@ public class PostgresShopService implements DatabaseAwareShopService {
                     SELECT product_id FROM products WHERE category_id = :category_id
                 )
                 """;
-        var params = new MapSqlParameterSource("category_id", categoryId);
-        return jdbc.update(sql, params);
+        return jdbc.update(sql, new MapSqlParameterSource("category_id", categoryId));
     }
 }
 
